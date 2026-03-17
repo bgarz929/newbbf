@@ -1,4 +1,5 @@
 from coincurve import PrivateKey as CCPrivateKey, PublicKey as CCPublicKey
+from Crypto.Hash import RIPEMD160
 import multiprocessing
 from multiprocessing import Value
 import hashlib
@@ -15,12 +16,13 @@ GENERATOR_PUBLIC_KEY = CCPrivateKey(int(1).to_bytes(32, 'big')).public_key
 # =========================
 # HASH160 (FIX UTAMA)
 # =========================
-
 def public_key_to_hash160(public_key_bytes):
     sha256_bpk = hashlib.sha256(public_key_bytes).digest()
-    ripemd160_bpk = hashlib.new('ripemd160', sha256_bpk).digest()
-    return ripemd160_bpk
-
+    
+    h = RIPEMD160.new()
+    h.update(sha256_bpk)
+    
+    return h.digest()
 
 # =========================
 # ADDRESS (OPSIONAL LOG)
