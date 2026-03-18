@@ -159,7 +159,7 @@ def brainflayer_worker(queue, lock, worker_id):
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=None,
             text=True,
             bufsize=1
         )
