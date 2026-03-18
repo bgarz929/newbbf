@@ -10,7 +10,7 @@ import subprocess
 import select
 from collections import deque
 import re
-import random
+import secrets
 
 # =========================
 # KONSTANTA
@@ -89,46 +89,53 @@ def is_valid_hash160_hex(s):
     return bool(HASH160_HEX_REGEX.match(s))
 
 # =========================
-# GENERATOR WORKER (dengan hybrid random+sequential dan multi-range)
+# GENERATOR WORKER (hybrid random+sequential, multi-range, dengan private key per item)
 # =========================
 def generator_worker(queue_list, speed_counter, total_counter, worker_id, range_start, range_end):
-    # Inisialisasi kunci acak dalam rentang yang ditentukan
-    private_key_int = random.randint(range_start, range_end)
+    range_size = range_end - range_start + 1
+
+    # Inisialisasi kunci acak dalam rentang yang ditentukan menggunakan sumber acak kriptografis
+    private_key_int = secrets.randbelow(range_size) + range_start
     current_key = CCPrivateKey(private_key_int.to_bytes(32, 'big'))
     current_pub_key = current_key.public_key
 
     # Buffer batch lokal
-    batch_private_start = private_key_int
-    batch_hash160_bytes = []
-    batch_hash160_hex = []
+    batch_private_keys = []        # list of int (private key per item)
+    batch_hash160_bytes = []       # list of bytes (hash160 per item)
+    batch_hash160_hex = []         # list of hex string (opsional, untuk pengiriman)
     local_counter = 0
     num_queues = len(queue_list)
-    queue_index = worker_id % num_queues  # distribusi awal
+    queue_index = worker_id % num_queues
 
     while True:
         # Generate hash160 untuk kunci saat ini
         public_key_bytes = current_pub_key.format(compressed=True)
         hash160_bytes = public_key_to_hash160(public_key_bytes)
-        hash160_hex = hash160_bytes.hex()
 
+        batch_private_keys.append(private_key_int)
         batch_hash160_bytes.append(hash160_bytes)
-        batch_hash160_hex.append(hash160_hex)
+        batch_hash160_hex.append(hash160_bytes.hex())
 
         # Jika batch penuh, kirim ke brainflayer worker via queue
         if len(batch_hash160_bytes) >= BATCH_SIZE:
-            # Gabungkan hash160 menjadi bytearray
-            batch_ba = bytearray()
+            # Gabungkan private keys menjadi bytearray (masing-masing 32 byte)
+            pk_ba = bytearray()
+            for pk in batch_private_keys:
+                pk_ba.extend(pk.to_bytes(32, 'big'))
+
+            # Gabungkan hash160 menjadi bytearray (masing-masing 20 byte)
+            h160_ba = bytearray()
             for h in batch_hash160_bytes:
-                batch_ba.extend(h)
+                h160_ba.extend(h)
 
             # Kirim ke queue yang dipilih (round-robin sederhana)
-            queue_list[queue_index].put((batch_private_start, batch_ba))
+            queue_list[queue_index].put((pk_ba, h160_ba))
             queue_index = (queue_index + 1) % num_queues
 
             # Reset batch
+            batch_private_keys = []
             batch_hash160_bytes = []
             batch_hash160_hex = []
-            batch_private_start = None  # akan diisi setelah next key ditentukan
 
         # Update counter
         local_counter += 1
@@ -141,45 +148,52 @@ def generator_worker(queue_list, speed_counter, total_counter, worker_id, range_
 
         # Tentukan kunci berikutnya (hybrid random+sequential)
         next_key = None
-        is_consecutive = False
+        sequential = False
 
-        if random.random() < RANDOM_JUMP_PROB:
+        if secrets.randbelow(1000000) < RANDOM_JUMP_PROB * 1000000:   # pendekatan tanpa floating point
             # Lompat acak dalam rentang
-            next_key = random.randint(range_start, range_end)
+            next_key = secrets.randbelow(range_size) + range_start
+            sequential = False
         else:
             # Sequential
             next_key = private_key_int + 1
             if next_key > range_end:
-                next_key = range_start  # wrap around dalam rentang
+                next_key = range_start          # wrap dalam rentang
+                sequential = False               # wrap bukan merupakan kelanjutan point addition
             else:
-                is_consecutive = True  # hanya sequential tanpa wrap
+                sequential = True
 
-        # Jika kunci berikutnya tidak berurutan, kirim batch yang tersisa (jika ada)
-        if not is_consecutive and batch_hash160_bytes:
-            # Kirim batch yang belum penuh
-            batch_ba = bytearray()
+        # Jika kunci berikutnya tidak berurutan (sequential = False) dan masih ada sisa batch,
+        # kirim batch yang belum penuh sebelum berpindah.
+        if not sequential and batch_hash160_bytes:
+            pk_ba = bytearray()
+            for pk in batch_private_keys:
+                pk_ba.extend(pk.to_bytes(32, 'big'))
+            h160_ba = bytearray()
             for h in batch_hash160_bytes:
-                batch_ba.extend(h)
-            queue_list[queue_index].put((batch_private_start, batch_ba))
+                h160_ba.extend(h)
+            queue_list[queue_index].put((pk_ba, h160_ba))
             queue_index = (queue_index + 1) % num_queues
+            batch_private_keys = []
             batch_hash160_bytes = []
             batch_hash160_hex = []
-            batch_private_start = None
 
-        # Set kunci berikutnya
+        # Update ke kunci berikutnya
         private_key_int = next_key
-        current_key = CCPrivateKey(private_key_int.to_bytes(32, 'big'))
-        current_pub_key = current_key.public_key
 
-        # Jika batch baru dimulai, catat start private key-nya
-        if batch_private_start is None:
-            batch_private_start = private_key_int
+        if sequential:
+            # Gunakan point addition (lebih cepat)
+            current_pub_key = CCPublicKey.combine_keys([current_pub_key, GENERATOR_PUBLIC_KEY])
+        else:
+            # Regenerate public key dari private key baru
+            current_key = CCPrivateKey(private_key_int.to_bytes(32, 'big'))
+            current_pub_key = current_key.public_key
 
 # =========================
-# BRAINFLAYER WORKER (tidak berubah)
+# BRAINFLAYER WORKER (dengan dukungan private key per item)
 # =========================
 def brainflayer_worker(queue, lock, worker_id):
-    # History: deque of (start_private_key, bytearray_of_hash160s)
+    # History: deque of (pk_ba, h160_ba)
     history = deque()
     total_keys_in_history = 0
 
@@ -201,14 +215,14 @@ def brainflayer_worker(queue, lock, worker_id):
 
     while True:
         try:
-            start_private_key, batch_ba = queue.get()
+            pk_ba, h160_ba = queue.get()
         except EOFError:
             break
 
-        # Konversi bytearray ke daftar hex untuk dikirim ke brainflayer
+        # Konversi h160_ba ke daftar hex untuk dikirim ke brainflayer
         hex_list = []
-        for i in range(0, len(batch_ba), 20):
-            h_bytes = batch_ba[i:i+20]
+        for i in range(0, len(h160_ba), 20):
+            h_bytes = h160_ba[i:i+20]
             hex_list.append(h_bytes.hex())
 
         try:
@@ -223,28 +237,33 @@ def brainflayer_worker(queue, lock, worker_id):
             except:
                 pass
             bf = start_brainflayer()
-            for s_key, s_ba in history:
-                s_hex_list = []
-                for j in range(0, len(s_ba), 20):
-                    s_hex_list.append(s_ba[j:j+20].hex())
+            # Kirim ulang semua history
+            for old_pk_ba, old_h160_ba in history:
+                old_hex_list = []
+                for j in range(0, len(old_h160_ba), 20):
+                    old_hex_list.append(old_h160_ba[j:j+20].hex())
                 try:
-                    send_batch_to_brainflayer(bf, s_hex_list)
+                    send_batch_to_brainflayer(bf, old_hex_list)
                 except BrokenPipeError:
                     print(f"Fatal: cannot resend history to brainflayer worker {worker_id}, exiting.")
                     return
+            # Kirim batch yang baru
             try:
                 send_batch_to_brainflayer(bf, hex_list)
             except BrokenPipeError:
                 print(f"Fatal: cannot send current batch to brainflayer worker {worker_id}, exiting.")
                 return
 
-        history.append((start_private_key, batch_ba))
-        total_keys_in_history += len(batch_ba) // 20
+        # Simpan batch ke history
+        history.append((pk_ba, h160_ba))
+        total_keys_in_history += len(h160_ba) // 20
 
+        # Hapus history tertua jika melebihi batas
         while total_keys_in_history > MAX_HISTORY_KEYS:
-            oldest_start, oldest_ba = history.popleft()
-            total_keys_in_history -= len(oldest_ba) // 20
+            oldest_pk_ba, oldest_h160_ba = history.popleft()
+            total_keys_in_history -= len(oldest_h160_ba) // 20
 
+        # Baca output brainflayer secara non‑blocking
         while select.select([bf.stdout], [], [], 0)[0]:
             line = bf.stdout.readline().strip()
             if not line or not is_valid_hash160_hex(line):
@@ -253,12 +272,16 @@ def brainflayer_worker(queue, lock, worker_id):
             match_bytes = bytes.fromhex(match_hex)
 
             found = False
-            for start_key, batch_ba in reversed(history):
-                batch_view = memoryview(batch_ba)
-                for i in range(0, len(batch_ba), 20):
-                    if batch_view[i:i+20] == match_bytes:
-                        private_key_found = start_key + (i // 20)
-                        private_key_hex = hex(private_key_found)[2:].zfill(64).upper()
+            # Cari di history (dari yang terbaru)
+            for hist_pk_ba, hist_h160_ba in reversed(history):
+                # Iterasi setiap hash160 dalam batch
+                for idx in range(0, len(hist_h160_ba), 20):
+                    if hist_h160_ba[idx:idx+20] == match_bytes:
+                        # Hitung indeks private key yang sesuai
+                        pk_idx = (idx // 20) * 32
+                        private_key_bytes = hist_pk_ba[pk_idx:pk_idx+32]
+                        private_key_int = int.from_bytes(private_key_bytes, 'big')
+                        private_key_hex = hex(private_key_int)[2:].zfill(64).upper()
                         address = hash160_to_address(match_bytes)
 
                         with lock:
@@ -292,7 +315,7 @@ if __name__ == "__main__":
     # Lock untuk file found.txt
     file_lock = Lock()
 
-    # Buat queue untuk setiap brainflayer worker
+    # Buat queue untuk setiap brainflayer worker (dengan batasan ukuran untuk backpressure alami)
     queues = [multiprocessing.Queue(maxsize=100) for _ in range(BRAINFLAYER_WORKERS)]
 
     # Tentukan rentang untuk setiap generator worker (membagi ruang kunci 2^256)
