@@ -18,7 +18,7 @@ GENERATOR_PUBLIC_KEY = CCPrivateKey(int(1).to_bytes(32, 'big')).public_key
 
 BATCH_SIZE = 100000                # Jumlah hash160 per batch (kirim ke brainflayer)
 MAX_HISTORY_KEYS = 5_000_000     # Maksimal hash160 yang disimpan per proses (≈ 100 MB per proses)
-UPDATE_INTERVAL = 100000            # Frekuensi update counter (keys)
+UPDATE_INTERVAL = 5000            # Frekuensi update counter (keys)
 
 # =========================
 # FUNGSI BANTU
