@@ -17,7 +17,7 @@ import re
 ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 GENERATOR_PUBLIC_KEY = CCPrivateKey(int(1).to_bytes(32, 'big')).public_key
 
-BATCH_SIZE = 50000                # Jumlah hash160 per batch (kirim ke brainflayer)
+BATCH_SIZE = 10000                # Jumlah hash160 per batch (kirim ke brainflayer)
 MAX_HISTORY_KEYS = 5_000_000     # Maksimal hash160 yang disimpan per proses brainflayer (≈ 100 MB per proses)
 UPDATE_INTERVAL = 5000            # Frekuensi update counter (keys)
 BRAINFLAYER_WORKERS = 6           # Jumlah proses brainflayer (sesuaikan dengan kemampuan I/O)
