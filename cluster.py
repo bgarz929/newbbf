@@ -154,7 +154,7 @@ def brainflayer_worker(queue, lock, worker_id):
         return subprocess.Popen(
             [
                 "./brainflayer/brainflayer",
-                "-v", "-b", "database.blf",
+                "-v", "-b", "040823BF.blf",
                 "-f", "/dev/stdin"
             ],
             stdin=subprocess.PIPE,
