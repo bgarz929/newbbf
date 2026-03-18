@@ -20,7 +20,7 @@ GENERATOR_PUBLIC_KEY = CCPrivateKey(int(1).to_bytes(32, 'big')).public_key
 BATCH_SIZE = 5000                # Jumlah hash160 per batch (kirim ke brainflayer)
 MAX_HISTORY_KEYS = 5_000_000     # Maksimal hash160 yang disimpan per proses brainflayer (≈ 100 MB per proses)
 UPDATE_INTERVAL = 5000            # Frekuensi update counter (keys)
-BRAINFLAYER_WORKERS = 6           # Jumlah proses brainflayer (sesuaikan dengan kemampuan I/O)
+BRAINFLAYER_WORKERS = 4           # Jumlah proses brainflayer (sesuaikan dengan kemampuan I/O)
 
 # Regex untuk mencocokkan hash160 hex (40 karakter hex)
 HASH160_HEX_REGEX = re.compile(r'^[0-9a-f]{40}$', re.IGNORECASE)
