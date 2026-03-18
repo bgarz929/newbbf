@@ -90,7 +90,7 @@ def worker(speed_counter, total_counter):
     bf = subprocess.Popen(
         [
             "./brainflayer/brainflayer",
-            "-b", "database.blf",
+            "-v","-b", "database.blf",
             "-f", "/dev/stdin"
         ],
         stdin=subprocess.PIPE,
@@ -144,7 +144,7 @@ def worker(speed_counter, total_counter):
                 bf = subprocess.Popen(
                     [
                         "./brainflayer/brainflayer",
-                        "-b", "database.blf",
+                        "-v","-b", "database.blf",
                         "-f", "/dev/stdin"
                     ],
                     stdin=subprocess.PIPE,
