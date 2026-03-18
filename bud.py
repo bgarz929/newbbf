@@ -9,6 +9,7 @@ import time
 import subprocess
 import select
 from collections import deque
+import re
 
 # =========================
 # KONSTANTA
@@ -19,6 +20,9 @@ GENERATOR_PUBLIC_KEY = CCPrivateKey(int(1).to_bytes(32, 'big')).public_key
 BATCH_SIZE = 5000                # Jumlah hash160 per batch (kirim ke brainflayer)
 MAX_HISTORY_KEYS = 5_000_000     # Maksimal hash160 yang disimpan per proses (≈ 100 MB per proses)
 UPDATE_INTERVAL = 5000            # Frekuensi update counter (keys)
+
+# Regex untuk mencocokkan hash160 hex (40 karakter hex)
+HASH160_HEX_REGEX = re.compile(r'^[0-9a-f]{40}$', re.IGNORECASE)
 
 # =========================
 # FUNGSI BANTU
@@ -77,6 +81,10 @@ def send_batch_to_brainflayer(bf, batch_hash160_hex):
     bf.stdin.write("\n".join(batch_hash160_hex) + "\n")
     bf.stdin.flush()
 
+def is_valid_hash160_hex(s):
+    """Periksa apakah string adalah hash160 hex yang valid."""
+    return bool(HASH160_HEX_REGEX.match(s))
+
 # =========================
 # WORKER
 # =========================
@@ -96,12 +104,12 @@ def worker(speed_counter, total_counter):
         return subprocess.Popen(
             [
                 "./brainflayer/brainflayer",
-                "-v", "-b", "database.blf",
+                "-v", "-b", "database.blf",   # -v untuk verbose (akan difilter)
                 "-f", "/dev/stdin"
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=None,
+            stderr=subprocess.DEVNULL,        # Abaikan stderr, atau bisa dialihkan ke file
             text=True,
             bufsize=1
         )
@@ -197,36 +205,40 @@ def worker(speed_counter, total_counter):
 
         # Baca output brainflayer secara non‑blocking
         while select.select([bf.stdout], [], [], 0)[0]:
-            result = bf.stdout.readline().strip()
-            if result:
-                # Hasil adalah hash160 yang cocok (dalam hex)
-                match_hex = result
-                match_bytes = bytes.fromhex(match_hex)
+            line = bf.stdout.readline().strip()
+            if not line:
+                continue
+            # Abaikan baris yang bukan hash160 hex (misalnya statistik dari -v)
+            if not is_valid_hash160_hex(line):
+                continue
+            # Hasil adalah hash160 yang cocok (dalam hex)
+            match_hex = line
+            match_bytes = bytes.fromhex(match_hex)
 
-                # Cari di history (dari yang terbaru)
-                found = False
-                for start_key, batch_ba in reversed(history):
-                    # Gunakan memoryview untuk scanning cepat
-                    batch_view = memoryview(batch_ba)
-                    for i in range(0, len(batch_ba), 20):
-                        if batch_view[i:i+20] == match_bytes:
-                            private_key_found = start_key + (i // 20)
-                            private_key_hex = hex(private_key_found)[2:].zfill(64).upper()
-                            address = hash160_to_address(match_bytes)
+            # Cari di history (dari yang terbaru)
+            found = False
+            for start_key, batch_ba in reversed(history):
+                # Gunakan memoryview untuk scanning cepat
+                batch_view = memoryview(batch_ba)
+                for i in range(0, len(batch_ba), 20):
+                    if batch_view[i:i+20] == match_bytes:
+                        private_key_found = start_key + (i // 20)
+                        private_key_hex = hex(private_key_found)[2:].zfill(64).upper()
+                        address = hash160_to_address(match_bytes)
 
-                            # Simpan ke file
-                            with open("found.txt", "a") as f:
-                                f.write(
-                                    f"PRIVATE: {private_key_hex}\n"
-                                    f"WIF: {private_key_to_wif(private_key_hex)}\n"
-                                    f"HASH160: {match_hex}\n"
-                                    f"ADDRESS: {address}\n\n"
-                                )
-                            print(f"\n🔥 FOUND: {address} (private key: {private_key_hex})")
-                            found = True
-                            break
-                    if found:
+                        # Simpan ke file
+                        with open("found.txt", "a") as f:
+                            f.write(
+                                f"PRIVATE: {private_key_hex}\n"
+                                f"WIF: {private_key_to_wif(private_key_hex)}\n"
+                                f"HASH160: {match_hex}\n"
+                                f"ADDRESS: {address}\n\n"
+                            )
+                        print(f"\n🔥 FOUND: {address} (private key: {private_key_hex})")
+                        found = True
                         break
+                if found:
+                    break
 
         # Update counter
         local_counter += 1
