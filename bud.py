@@ -109,7 +109,7 @@ def worker(speed_counter, total_counter):
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,        # Abaikan stderr, atau bisa dialihkan ke file
+            stderr=None,        # Abaikan stderr, atau bisa dialihkan ke file
             text=True,
             bufsize=1
         )
